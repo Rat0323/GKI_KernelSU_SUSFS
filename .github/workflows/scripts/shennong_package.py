@@ -20,6 +20,66 @@ PINS = {
     "avb": "c5066a96caa7bf4150c0a8cc8cc14ab81733fdc7",
     "anykernel": "41f04bdb4ee30a44e429c2c1131d5e8bb32b15f1",
 }
+INSTALLER_SOURCES = {
+    "tools/busybox": {
+        "archive": "UPDATE-Busybox.Installer.v1.36.1-ALL-signed.zip",
+        "archive_sha256": "d6b0baeb4f224e994113d29c2d47e6df2413b6cd65fd8b88c2b7d53e0db26c09",
+        "member": "busybox-arm64",
+        "sha256": "c629fce4b0dd3ba9775f851d0941e74582115f423258d3a79800f2bd11d30f5c",
+        "release": "https://github.com/Magisk-Modules-Repo/busybox-ndk/releases/tag/13614",
+        "revision": "ad6700620120e3c475df05b0f8bfa7a40e741ee0",
+    },
+    "tools/magiskboot": {
+        "archive": "Magisk-v31.1.apk",
+        "archive_sha256": "89cefac0a318afa39fb3880c45c87b036c05bc1ebf02a7a715b7f8d7c26ac6e7",
+        "member": "lib/arm64-v8a/libmagiskboot.so",
+        "sha256": "97e9ec75731103d31c9e1effca7a50c6444309ce8f78c2ec27e9fe721da4bb54",
+        "release": "https://github.com/topjohnwu/Magisk/releases/tag/v31.1",
+        "revision": "0972f67d97f9b6302b67c5171283330c74114b4a",
+    },
+}
+
+
+def validate_installer_binary(data, name):
+    if len(data) < 64 or data[:7] != b"\x7fELF\x02\x01\x01":
+        raise ValueError(f"{name}: native little-endian ARM64 ELF64 required")
+    kind, machine, version, entry, phoff, _, _, ehsize, phsize, count, _, _, _ = (
+        struct.unpack_from("<HHIQQQIHHHHHH", data, 16))
+    if machine != 183 or kind != 2 or version != 1:
+        raise ValueError(f"{name}: native ARM64 executable required")
+    if ehsize != 64 or phsize != 56 or count == 0 or phoff + count * phsize > len(data):
+        raise ValueError(f"{name}: invalid ELF program headers")
+    executable_entry = False
+    for index in range(count):
+        segment, flags, offset, address, _, size, memory, _ = struct.unpack_from(
+            "<IIQQQQQQ", data, phoff + index * phsize)
+        if segment in {2, 3}:
+            raise ValueError(f"{name}: dynamic dependencies/interpreter not permitted")
+        if segment == 1:
+            if size > memory or offset + size > len(data):
+                raise ValueError(f"{name}: ELF load segment outside file")
+            executable_entry |= bool(flags & 1 and address <= entry < address + size)
+    if not executable_entry:
+        raise ValueError(f"{name}: entry is not in file-backed executable code")
+    return {"architecture": "AArch64", "elf_class": 64, "static": True,
+            "sha256": hashlib.sha256(data).hexdigest()}
+
+
+def load_installer_tools(assets):
+    tools = {}
+    for name, source in INSTALLER_SOURCES.items():
+        archive_path = assets / source["archive"]
+        with archive_path.open("rb") as stream:
+            actual = hashlib.file_digest(stream, "sha256").hexdigest()
+        if actual != source["archive_sha256"]:
+            raise ValueError(f"{name}: installer archive hash mismatch")
+        with zipfile.ZipFile(archive_path) as archive:
+            content = archive.read(source["member"])
+        if hashlib.sha256(content).hexdigest() != source["sha256"]:
+            raise ValueError(f"{name}: installer member hash mismatch")
+        validate_installer_binary(content, name)
+        tools[name] = content
+    return tools
 
 
 def inspect_boot(data):
@@ -92,13 +152,18 @@ def verify_candidate(path, name):
     return report
 
 
-def create_anykernel(image_path, repo, output):
+def create_anykernel(image_path, repo, output, tools=None):
+    if tools is None or set(tools) != {"tools/busybox", "tools/magiskboot"}:
+        raise ValueError("explicit verified ARM64 installer tools required")
+    for name, content in tools.items():
+        validate_installer_binary(content, name)
     members = ["LICENSE", "META-INF/com/google/android/update-binary",
                "META-INF/com/google/android/updater-script",
                "tools/ak3-core.sh", "tools/busybox", "tools/magiskboot"]
     with zipfile.ZipFile(output, "x", compression=zipfile.ZIP_DEFLATED) as archive:
         for name in members:
-            content = run(["git", "show", f"HEAD:{name}"], repo, capture_output=True).stdout
+            content = (tools[name] if name in tools else
+                       run(["git", "show", f"HEAD:{name}"], repo, capture_output=True).stdout)
             entry = zipfile.ZipInfo(name)
             entry.create_system = 3
             entry.external_attr = (0o100755 if name != "LICENSE" else 0o100644) << 16
@@ -108,11 +173,20 @@ def create_anykernel(image_path, repo, output):
     with zipfile.ZipFile(output) as archive:
         if archive.testzip() is not None or archive.read("Image") != image_path.read_bytes():
             raise ValueError("AnyKernel zip round-trip mismatch")
+        for name, content in tools.items():
+            if archive.read(name) != content:
+                raise ValueError(f"{name}: AnyKernel tool round-trip mismatch")
+
+
+def boot_output_paths(output, name):
+    # AVB resolves the hash descriptor's partition name as a sibling filename.
+    return output / "boot.img", output / f"{name}-UNSIGNED-EXPERIMENTAL-boot.img"
 
 
 def package(args):
     for name in PINS:
         verify_repository(getattr(args, name), name)
+    tools = load_installer_tools(args.installer_assets)
     stock = args.stock_boot.read_bytes()
     if hashlib.sha256(stock).hexdigest() != STOCK_SHA:
         raise ValueError("stock boot hash does not match the verified ROM backup")
@@ -132,7 +206,7 @@ def package(args):
     properties = [desc for desc in descriptors if isinstance(desc, avb.AvbPropertyDescriptor)]
     if len(hashes) + len(properties) != len(descriptors):
         raise ValueError("unknown stock AVB descriptor type")
-    boot = out / f"{args.name}-UNSIGNED-EXPERIMENTAL-boot.img"
+    boot, final_boot = boot_output_paths(out, args.name)
     run([sys.executable, args.mkbootimg / "mkbootimg.py", "--header_version", "4",
          "--kernel", args.image, "--output", boot])
     generated = boot.read_bytes()
@@ -157,14 +231,19 @@ def package(args):
         raise ValueError("candidate boot partition size changed")
     if packed[4096:4096 + len(image)] != image:
         raise ValueError("boot kernel round-trip mismatch")
+    boot.rename(final_boot)
     archive = out / f"{args.name}-EXPERIMENTAL-AnyKernel3.zip"
-    create_anykernel(args.image, args.anykernel, archive)
+    create_anykernel(args.image, args.anykernel, archive, tools)
     report.update({
         "stock_sha256": STOCK_SHA, "stock_layout": layout,
         "candidate_layout": packed_layout, "tool_source_pins": PINS,
         "authentication": "unsigned AVB NONE; original OEM/GKI signatures not copied",
         "runtime": "NOT TESTED; separate flash/root-migration approval required",
         "anykernel_target": "active-slot boot only; requires verified stock boot",
+        "anykernel_runtime": "installer not executed; magiskboot footer/certificate handling unverified",
+        "installer_sources": INSTALLER_SOURCES,
+        "installer_binaries": {name: validate_installer_binary(data, name)
+                               for name, data in tools.items()},
     })
     (out / "packaging-validation.json").write_text(json.dumps(report, indent=2) + "\n")
     entries = []
@@ -177,7 +256,7 @@ def package(args):
 
 def main():
     parser = argparse.ArgumentParser()
-    for name in ["stock-boot", "image", "mkbootimg", "avb", "anykernel", "out"]:
+    for name in ["stock-boot", "image", "mkbootimg", "avb", "anykernel", "installer-assets", "out"]:
         parser.add_argument(f"--{name}", type=Path, required=True)
     parser.add_argument("--name", required=True, choices=["sukisu-susfs-base", "sukisu-susfs-kpm"])
     package(parser.parse_args())

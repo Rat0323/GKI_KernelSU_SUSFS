@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -67,6 +68,80 @@ def boot():
     data[8192:8196] = b"AVB0"
     struct.pack_into(">4sIIQQQ", data, len(data) - 64, b"AVBf", 1, 0, 8192, 8192, 256)
     return bytes(data)
+
+
+def installer_elf(machine=183, elf_class=2, segment_type=1):
+    data = bytearray(256)
+    data[:7] = b"\x7fELF" + bytes([elf_class, 1, 1])
+    struct.pack_into("<HHIQQQIHHHHHH", data, 16,
+                     2, machine, 1, 0x400080, 64, 0, 0, 64, 56, 1, 0, 0, 0)
+    struct.pack_into("<IIQQQQQQ", data, 64,
+                     segment_type, 5, 0, 0x400000, 0x400000, len(data), len(data), 4096)
+    return bytes(data)
+
+
+class InstallerArchitectureTests(unittest.TestCase):
+    def test_default_arm32_template_cannot_be_packaged(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            image = root / "Image"
+            image.write_bytes(b"verified image fixture")
+            with patch.object(packager, "run") as command:
+                command.return_value.stdout = installer_elf(machine=40, elf_class=1)
+                with self.assertRaisesRegex(ValueError, "ARM64"):
+                    packager.create_anykernel(image, root, root / "candidate.zip")
+            self.assertFalse((root / "candidate.zip").exists())
+
+    def test_native_arm64_static_executable_accepted(self):
+        result = packager.validate_installer_binary(installer_elf(), "busybox")
+        self.assertEqual(result["architecture"], "AArch64")
+        self.assertEqual(result["sha256"], hashlib.sha256(installer_elf()).hexdigest())
+
+    def test_arm32_and_wrong_machine_rejected(self):
+        for data in [installer_elf(machine=40, elf_class=1), installer_elf(machine=62)]:
+            with self.subTest(header=data[:20]):
+                with self.assertRaisesRegex(ValueError, "ARM64"):
+                    packager.validate_installer_binary(data, "busybox")
+
+    def test_truncated_or_dynamic_executable_rejected(self):
+        for data in [installer_elf()[:20], installer_elf()[:80],
+                     installer_elf(segment_type=3), installer_elf(segment_type=2)]:
+            with self.subTest(size=len(data), header=data[:20]):
+                with self.assertRaises(ValueError):
+                    packager.validate_installer_binary(data, "magiskboot")
+
+    def test_arm64_tools_round_trip_in_zip(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            image = root / "Image"
+            image.write_bytes(b"verified image fixture")
+            tools = {name: installer_elf() for name in ["tools/busybox", "tools/magiskboot"]}
+            with patch.object(packager, "run") as command:
+                command.return_value.stdout = b"# pinned script fixture\n"
+                packager.create_anykernel(image, root, root / "candidate.zip", tools)
+            with zipfile.ZipFile(root / "candidate.zip") as archive:
+                for name, expected in tools.items():
+                    self.assertEqual(archive.read(name), expected)
+
+    def test_installer_archive_and_member_hashes_enforced(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            asset = root / "tools.zip"
+            binary = installer_elf()
+            with zipfile.ZipFile(asset, "w") as archive:
+                archive.writestr("arm64/tool", binary)
+            source = {"archive": asset.name, "member": "arm64/tool",
+                      "archive_sha256": hashlib.sha256(asset.read_bytes()).hexdigest(),
+                      "sha256": hashlib.sha256(binary).hexdigest()}
+            with patch.dict(packager.INSTALLER_SOURCES,
+                            {"tools/busybox": source}, clear=True):
+                self.assertEqual(packager.load_installer_tools(root)["tools/busybox"], binary)
+                source["sha256"] = "0" * 64
+                with self.assertRaisesRegex(ValueError, "member hash"):
+                    packager.load_installer_tools(root)
+                source["archive_sha256"] = "0" * 64
+                with self.assertRaisesRegex(ValueError, "archive hash"):
+                    packager.load_installer_tools(root)
 
 
 class CandidateTests(unittest.TestCase):
@@ -134,6 +209,12 @@ class SourceIntegrityTests(unittest.TestCase):
 
 
 class BootLayoutTests(unittest.TestCase):
+    def test_avb_staging_name_matches_boot_partition(self):
+        staged, final = packager.boot_output_paths(Path("new-output"), "sukisu-susfs-base")
+        self.assertEqual(staged.name, "boot.img")
+        self.assertEqual(final.name, "sukisu-susfs-base-UNSIGNED-EXPERIMENTAL-boot.img")
+        self.assertEqual(staged.parent, final.parent)
+
     def test_candidate_without_resolved_config_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             image = Path(directory) / "Image"
