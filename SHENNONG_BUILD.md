@@ -51,3 +51,22 @@ Run local regressions with `python -m unittest discover -s tests -v`.
 Passing compilation/static gates means an experimental candidate only.
 Flashing, root migration and benign KPM load/unload tests require separate
 human approval and verified rollback files.
+
+## Offline Packaging
+
+`shennong_package.py` consumes only independently validated CI Images,
+their resolved and embedded configurations, and the exact stock boot
+backup. Packaging tools must have the pinned HEAD and no local changes.
+It creates a canonical kernel-only v4 boot at the verified 96 MiB
+partition size, with a recomputed unsigned AVB hash footer. Invalid OEM/GKI
+signatures from the old kernel are not carried over.
+
+The separate AnyKernel3 ZIP includes only the selected Image and a pinned
+kernel-only installer. Its checks restrict it to shennong,
+OS3.0.310.0.WNBCNXM and the verified stock boot hash. It targets active-slot
+boot only, not init_boot, vendor_boot, DTB or global vbmeta. Neither the
+installer nor bootloader acceptance is verified by an offline ZIP
+round-trip. Both package types remain explicitly experimental.
+
+No package is produced from failure diagnostics or the old malformed
+Image. Re-extracted Image hashes must match the validated build.
