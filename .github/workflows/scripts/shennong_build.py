@@ -97,6 +97,9 @@ def prepare(work, out, lock):
     with (common / "drivers/Kconfig").open("a") as stream:
         stream.write('\nsource "drivers/kernelsu/Kconfig"\n')
     patches = work / "susfs/kernel_patches"
+    adaptation = ROOT / "patches/susfs-6138-context.patch"
+    run(["git", "apply", "--check", str(adaptation)], work / "susfs")
+    run(["git", "apply", str(adaptation)], work / "susfs")
     patch = patches / "50_add_susfs_in_gki-android14-6.1.patch"
     run(["git", "apply", "--check", str(patch)], common)
     run(["git", "apply", str(patch)], common)

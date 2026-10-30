@@ -18,6 +18,9 @@ SukiSU's builtin source is used directly; the root-side SuSFS patch is not
 applied twice. The filesystem patch is checked before applying. SukiSU's
 moving network-derived version metadata is replaced with recorded values,
 without changing root logic or presenting a main-branch checkout as builtin.
+The three newer ACK include contexts in the SuSFS patch are adapted to this
+stock revision by `patches/susfs-6138-context.patch`; no functional SuSFS
+patch additions/removals are changed.
 
 ## Gates and Intentional Differences
 
