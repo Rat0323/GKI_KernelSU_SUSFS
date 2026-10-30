@@ -68,5 +68,10 @@ boot only, not init_boot, vendor_boot, DTB or global vbmeta. Neither the
 installer nor bootloader acceptance is verified by an offline ZIP
 round-trip. Both package types remain explicitly experimental.
 
+KPM packaging independently parses the pinned fork's preset. It verifies
+the compiled payload's header/code, original Image identity, setup entry,
+empty extra-module region and copy reservation within declared Image
+memory. The patch tool's status text alone is not acceptance.
+
 No package is produced from failure diagnostics or the old malformed
 Image. Re-extracted Image hashes must match the validated build.

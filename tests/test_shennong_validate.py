@@ -86,5 +86,70 @@ class ConfigTests(unittest.TestCase):
             validator.validate_config(CONFIG + "\nCONFIG_KSU=m")
 
 
+def kpm_fixture():
+    original = image(size=8192, memory_size=16384)
+    payload = bytearray(8192)
+    payload[:8] = b"KP1158\0\0"
+    struct.pack_into("<Q", payload, 16, 2)
+    payload[4096:4100] = b"\x1f\x20\x03\xd5"
+    data = bytearray(original) + payload + bytearray(128)
+    struct.pack_into("<I", data, 4, 0x14000000 | ((8192 + 4096 - 4) // 4))
+    struct.pack_into("<Q", data, 16, 32768)
+    struct.pack_into("<7q", data, 8192 + 64 + 8,
+                     len(original), len(payload), 16384, 12, 8192, 20480, 128)
+    data[8192 + 224:8192 + 232] = original[:8]
+    return bytes(data), original, bytes(payload)
+
+
+class KpmLayoutTests(unittest.TestCase):
+    def test_payload_and_memory_copy_range_match(self):
+        data, original, payload = kpm_fixture()
+        report = validator.validate_kpm(data, original, payload)
+        self.assertEqual(report["payload_offset"], 8192)
+        self.assertEqual(report["copy_start"], 20480)
+
+    def test_missing_payload_rejected(self):
+        data, original, payload = kpm_fixture()
+        modified = bytearray(data)
+        modified[8192] = 0
+        with self.assertRaisesRegex(ValueError, "payload"):
+            validator.validate_kpm(bytes(modified), original, payload)
+
+    def test_modified_payload_code_rejected(self):
+        data, original, payload = kpm_fixture()
+        modified = bytearray(data)
+        modified[8192 + 4096] ^= 1
+        with self.assertRaisesRegex(ValueError, "payload"):
+            validator.validate_kpm(bytes(modified), original, payload)
+
+    def test_entry_must_target_payload_setup(self):
+        data, original, payload = kpm_fixture()
+        modified = bytearray(data)
+        struct.pack_into("<I", modified, 4, 0x1400001F)
+        with self.assertRaisesRegex(ValueError, "entry"):
+            validator.validate_kpm(bytes(modified), original, payload)
+
+    def test_copy_range_must_fit_declared_memory(self):
+        data, original, payload = kpm_fixture()
+        modified = bytearray(data)
+        struct.pack_into("<Q", modified, 16, 24576)
+        with self.assertRaisesRegex(ValueError, "memory"):
+            validator.validate_kpm(bytes(modified), original, payload)
+
+    def test_wrong_original_kernel_rejected(self):
+        data, original, payload = kpm_fixture()
+        modified = bytearray(original)
+        struct.pack_into("<Q", modified, 16, 32768)
+        with self.assertRaisesRegex(ValueError, "original"):
+            validator.validate_kpm(data, bytes(modified), payload)
+
+    def test_unexpected_extra_module_rejected(self):
+        data, original, payload = kpm_fixture()
+        modified = bytearray(data)
+        modified[-128] = 1
+        with self.assertRaisesRegex(ValueError, "extra"):
+            validator.validate_kpm(bytes(modified), original, payload)
+
+
 if __name__ == "__main__":
     unittest.main()

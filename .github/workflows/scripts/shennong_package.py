@@ -11,7 +11,7 @@ import zipfile
 from pathlib import Path
 
 from shennong_build import ROOT, run
-from shennong_validate import validate_config, validate_image
+from shennong_validate import validate_config, validate_image, validate_kpm
 
 
 STOCK_SHA = "f75f52b48aa1f955a26e8c9cd7ff072a4a7ac91dcb54b6f82b809a287997c861"
@@ -83,6 +83,12 @@ def verify_candidate(path, name):
     metadata = path.parent / ("kpm-validation.json" if kpm else "validation.json")
     if json.loads(metadata.read_text())["sha256"] != report["sha256"]:
         raise ValueError("candidate hash differs from validated CI artifact")
+    if kpm:
+        original = (path.parent / "Image").read_bytes()
+        original_sha = json.loads((path.parent / "validation.json").read_text())["sha256"]
+        if hashlib.sha256(original).hexdigest() != original_sha:
+            raise ValueError("unpatched KPM variant hash mismatch")
+        report["kpm"] = validate_kpm(data, original, (path.parent / "kpimg").read_bytes())
     return report
 
 

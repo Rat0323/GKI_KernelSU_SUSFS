@@ -30,6 +30,49 @@ def validate_image(data: bytes) -> dict:
     }
 
 
+def validate_kpm(data: bytes, original: bytes, payload: bytes) -> dict:
+    """Check the pinned ARM64 fork's preset and code without running kptools."""
+    report, base = validate_image(data), validate_image(original)
+    offset = (len(original) + 4095) // 4096 * 4096
+    if len(payload) <= 4096 or payload[:8] != b"KP1158\0\0":
+        raise ValueError("missing compiled KPM payload")
+    if struct.unpack_from("<Q", payload, 16)[0] != 2:
+        raise ValueError("KPM payload must be Android release ARM64")
+    if offset + len(payload) + 128 > len(data):
+        raise ValueError("KPM payload outside file")
+    if data[offset:offset + 64] != payload[:64]:
+        raise ValueError("KPM payload header mismatch")
+    # kpimg.lds reserves the first 4K for the mutable preset, not code.
+    if data[offset + 4096:offset + len(payload)] != payload[4096:]:
+        raise ValueError("compiled KPM payload code mismatch")
+    if report["branch_target"] != offset + 4096:
+        raise ValueError("KPM entry must target the file-backed setup code")
+    fields = struct.unpack_from("<7q", data, offset + 64 + 8)
+    kimg_size, kpimg_size, kernel_size, page_shift, setup, start, extra = fields
+    if (kimg_size, kpimg_size, kernel_size, page_shift, setup) != (
+            len(original), len(payload), base["memory_size"], 12, offset):
+        raise ValueError("KPM preset differs from original kernel/payload")
+    if data[offset + 224:offset + 232] != original[:8]:
+        raise ValueError("KPM original entry backup mismatch")
+    if extra != 128 or len(data) != offset + len(payload) + extra or any(data[-128:]):
+        raise ValueError("unexpected KPM extra module or footer layout")
+    if any(data[len(original):offset]):
+        raise ValueError("unexpected padding before KPM payload")
+    expected_start = max((base["memory_size"] + 4095) // 4096 * 4096,
+                         (len(data) + 4095) // 4096 * 4096)
+    if start != expected_start:
+        raise ValueError("KPM memory copy start overlaps the input image")
+    if report["memory_size"] < start + len(payload) + extra:
+        raise ValueError("KPM copy exceeds declared Image memory")
+    return {
+        "payload_offset": offset, "payload_size": len(payload),
+        "payload_sha256": hashlib.sha256(payload).hexdigest(),
+        "unpatched_sha256": base["sha256"], "copy_start": start,
+        "copy_reserved_end": start + len(payload) + extra,
+        "preset_contract": "SukiSU KernelPatch 1c5b608916357ac86a94cc736e235db1fac4a29d",
+    }
+
+
 def parse_config(text: str) -> dict:
     values = {}
     for line in text.splitlines():

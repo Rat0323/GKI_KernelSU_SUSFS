@@ -31,6 +31,23 @@ def candidate(directory, kpm=False):
     data[56:60] = b"ARM\x64"
     embedded = b"IKCFG_ST" + gzip.compress(config.encode()) + b"IKCFG_ED"
     data[512:512 + len(embedded)] = embedded
+    (directory / "Image").write_bytes(data)
+    (directory / "validation.json").write_text(json.dumps({
+        "sha256": hashlib.sha256(data).hexdigest(),
+    }))
+    if kpm:
+        original = bytes(data)
+        payload = bytearray(8192)
+        payload[:8] = b"KP1158\0\0"
+        struct.pack_into("<Q", payload, 16, 2)
+        payload[4096:4100] = b"\x1f\x20\x03\xd5"
+        (directory / "kpimg").write_bytes(payload)
+        data += payload + bytearray(128)
+        struct.pack_into("<I", data, 4, 0x14000000 | ((8192 - 4) // 4))
+        struct.pack_into("<Q", data, 16, 28672)
+        struct.pack_into("<7q", data, 4096 + 64 + 8,
+                         len(original), len(payload), 4096, 12, 4096, 16384, 128)
+        data[4096 + 224:4096 + 232] = original[:8]
     image = directory / ("Image.kpm" if kpm else "Image")
     image.write_bytes(data)
     (directory / ".config").write_text(config)
@@ -87,6 +104,13 @@ class CandidateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             image = candidate(Path(directory))
             with self.assertRaisesRegex(ValueError, "CONFIG_KPM"):
+                packager.verify_candidate(image, "sukisu-susfs-kpm")
+
+    def test_kpm_requires_compiled_payload_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            image = candidate(Path(directory), True)
+            (Path(directory) / "kpimg").unlink()
+            with self.assertRaises(FileNotFoundError):
                 packager.verify_candidate(image, "sukisu-susfs-kpm")
 
 
