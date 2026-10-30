@@ -86,6 +86,27 @@ class ConfigTests(unittest.TestCase):
             validator.validate_config(CONFIG + "\nCONFIG_KSU=m")
 
 
+class ProtectedExportsTests(unittest.TestCase):
+    HEADER = """#define NR_PROTECTED_EXPORTS_SYMBOLS \\
+    (ARRAY_SIZE(gki_protected_exports_symbols))
+#define MAX_PROTECTED_EXPORTS_NAME_LEN (1)
+static const char gki_protected_exports_symbols[][MAX_PROTECTED_EXPORTS_NAME_LEN] = {
+};
+"""
+
+    def test_empty_generated_table_accepted(self):
+        self.assertEqual(validator.validate_protected_exports(self.HEADER)["symbol_count"], 0)
+
+    def test_actual_boot_failure_symbol_rejected(self):
+        header = self.HEADER.replace("(1)", "(13)").replace("{\n};", '{\n"rfkill_alloc",\n};')
+        with self.assertRaisesRegex(ValueError, "protected exports"):
+            validator.validate_protected_exports(header)
+
+    def test_missing_generated_table_rejected(self):
+        with self.assertRaisesRegex(ValueError, "protected exports"):
+            validator.validate_protected_exports("")
+
+
 def kpm_fixture():
     original = image(size=8192, memory_size=16384)
     payload = bytearray(8192)

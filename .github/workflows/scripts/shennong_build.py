@@ -12,7 +12,7 @@ import tarfile
 import urllib.request
 from pathlib import Path
 
-from shennong_validate import validate_config, validate_image
+from shennong_validate import validate_config, validate_image, validate_protected_exports
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -136,12 +136,16 @@ def prepare(work, out, lock):
     # Record actual .config as a declared build output, not an intended fragment.
     replace_once(tree / "build/kernel/kleaf/constants.bzl",
                  'DEFAULT_GKI_OUTS = _common_outs + DEFAULT_IMAGES',
-                 'DEFAULT_GKI_OUTS = _common_outs + DEFAULT_IMAGES + [".config"]')
+                 'DEFAULT_GKI_OUTS = _common_outs + DEFAULT_IMAGES + '
+                 '[".config", "gki_module_protected_exports.h"]')
     return tree
 
 
 def configure(tree, kpm):
     common = tree / "common"
+    # Kbuild reads this file even when the Bazel protected_exports_list is None.
+    # Keep an empty file so incremental header generation also replaces stale data.
+    (common / "android/abi_gki_protected_exports_aarch64").write_text("")
     config = common / "arch/arm64/configs/gki_defconfig"
     text = config.read_text()
     for name in ["KSU", "KSU_SUSFS", "KPM", "IKCONFIG", "IKCONFIG_PROC"]:
@@ -161,13 +165,16 @@ def build_variant(tree, out, name, kpm):
         run(["tools/bazel", "build", "--lto=none", "--jobs=2",
              "//common:kernel_aarch64"], tree, stdout=stream, stderr=subprocess.STDOUT)
     products = tree / "bazel-bin/common/kernel_aarch64"
-    names = ["Image", "vmlinux", "System.map", ".config", "vmlinux.symvers"]
+    names = ["Image", "vmlinux", "System.map", ".config", "vmlinux.symvers",
+             "gki_module_protected_exports.h"]
     require_outputs(products, names)
     data = (products / "Image").read_bytes()
     report = validate_image(data)
+    report["module_exports"] = validate_protected_exports(
+        (products / "gki_module_protected_exports.h").read_text())
     config_text = (products / ".config").read_text()
     config = validate_config(config_text, require_kpm=kpm)
-    for key in ["CFI_CLANG", "SHADOW_CALL_STACK", "LTO_NONE", "MODVERSIONS"]:
+    for key in ["CFI_CLANG", "SHADOW_CALL_STACK", "LTO_NONE", "MODVERSIONS", "MODULE_SIG_PROTECT"]:
         if config.get(f"CONFIG_{key}") != "y":
             raise ValueError(f"stock critical setting lost: CONFIG_{key}")
     begin, end = data.find(b"IKCFG_ST"), data.find(b"IKCFG_ED")

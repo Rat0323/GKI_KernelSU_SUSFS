@@ -1,6 +1,7 @@
 """Independent static gates. Passing these gates is not a bootability claim."""
 
 import hashlib
+import re
 import struct
 
 
@@ -86,6 +87,17 @@ def parse_config(text: str) -> dict:
             raise ValueError(f"conflicting resolved config: {key}")
         values[key] = value
     return values
+
+
+def validate_protected_exports(text: str) -> dict:
+    empty_table = re.search(
+        r"static const char gki_protected_exports_symbols\[\]"
+        r"\[MAX_PROTECTED_EXPORTS_NAME_LEN\]\s*=\s*\{\s*\};", text)
+    minimum_width = re.search(
+        r"^#define MAX_PROTECTED_EXPORTS_NAME_LEN\s+\(1\)\s*$", text, re.M)
+    if not empty_table or not minimum_width:
+        raise ValueError("generated protected exports table must be empty for stock module compatibility")
+    return {"symbol_count": 0, "header_sha256": hashlib.sha256(text.encode()).hexdigest()}
 
 
 def validate_config(text: str, require_kpm: bool = True) -> dict:

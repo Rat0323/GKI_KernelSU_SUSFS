@@ -51,6 +51,25 @@ class PipelineTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 builder.replace_once(path, "expected", "changed")
 
+    def test_configure_clears_kbuild_protected_exports_for_both_variants(self):
+        for kpm in (False, True):
+            with self.subTest(kpm=kpm), tempfile.TemporaryDirectory() as directory:
+                tree = Path(directory)
+                common = tree / "common"
+                config = common / "arch/arm64/configs/gki_defconfig"
+                config.parent.mkdir(parents=True)
+                config.write_text("CONFIG_MODULE_SIG_PROTECT=y\nCONFIG_CFI_CLANG=y\n")
+                (common / "android").mkdir()
+                protected = common / "android/abi_gki_protected_exports_aarch64"
+                protected.write_text("rfkill_alloc\nslhc_compress\n")
+                vendor = common / "android/abi_gki_aarch64_vendor"
+                vendor.write_text("[abi_symbol_list]\n  vendor_api\n")
+                builder.configure(tree, kpm)
+                self.assertTrue(protected.is_file())
+                self.assertEqual(protected.read_text(), "")
+                self.assertIn("CONFIG_MODULE_SIG_PROTECT=y", config.read_text())
+                self.assertEqual(vendor.read_text(), "[abi_symbol_list]\n  vendor_api\n")
+
 
 if __name__ == "__main__":
     unittest.main()
