@@ -18,6 +18,11 @@ SPEC = importlib.util.spec_from_file_location("shennong_package", SCRIPTS / "she
 packager = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(packager)
 
+EMPTY_EXPORTS = """#define MAX_PROTECTED_EXPORTS_NAME_LEN (1)
+static const char gki_protected_exports_symbols[][MAX_PROTECTED_EXPORTS_NAME_LEN] = {
+};
+"""
+
 
 def candidate(directory, kpm=False):
     config = "\n".join([
@@ -52,10 +57,17 @@ def candidate(directory, kpm=False):
     image = directory / ("Image.kpm" if kpm else "Image")
     image.write_bytes(data)
     (directory / ".config").write_text(config)
+    (directory / "gki_module_protected_exports.h").write_text(EMPTY_EXPORTS)
     metadata = "kpm-validation.json" if kpm else "validation.json"
     (directory / metadata).write_text(json.dumps({
         "sha256": hashlib.sha256(data).hexdigest(),
     }))
+    validation = directory / "validation.json"
+    report = json.loads(validation.read_text())
+    report["module_exports"] = {
+        "symbol_count": 0, "header_sha256": hashlib.sha256(EMPTY_EXPORTS.encode()).hexdigest(),
+    }
+    validation.write_text(json.dumps(report))
     return image
 
 
@@ -114,7 +126,7 @@ class InstallerArchitectureTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             image = root / "Image"
-            image.write_bytes(b"verified image fixture")
+            image.write_bytes(boot())
             tools = {name: installer_elf() for name in ["tools/busybox", "tools/magiskboot"]}
             with patch.object(packager, "run") as command:
                 command.return_value.stdout = b"# pinned script fixture\n"
@@ -122,6 +134,13 @@ class InstallerArchitectureTests(unittest.TestCase):
             with zipfile.ZipFile(root / "candidate.zip") as archive:
                 for name, expected in tools.items():
                     self.assertEqual(archive.read(name), expected)
+                self.assertEqual(archive.read("candidate-boot.img"), image.read_bytes())
+                self.assertNotIn("Image", archive.namelist())
+                installer = archive.read("anykernel.sh").decode()
+                self.assertIn(hashlib.sha256(image.read_bytes()).hexdigest(), installer)
+                self.assertNotIn("@BOOT_SHA256@", installer)
+                self.assertNotIn("flash_boot;", installer)
+                self.assertIn("tools/shennong-flash.sh", archive.namelist())
 
     def test_installer_archive_and_member_hashes_enforced(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -145,6 +164,29 @@ class InstallerArchitectureTests(unittest.TestCase):
 
 
 class CandidateTests(unittest.TestCase):
+    def test_legacy_artifact_without_generated_header_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            image = candidate(Path(directory))
+            (image.parent / "gki_module_protected_exports.h").unlink()
+            with self.assertRaises(FileNotFoundError):
+                packager.verify_candidate(image, "sukisu-susfs-base")
+
+    def test_nonempty_protected_exports_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            image = candidate(Path(directory))
+            (image.parent / "gki_module_protected_exports.h").write_text(
+                EMPTY_EXPORTS.replace("{\n};", '{\n"rfkill_alloc",\n};'))
+            with self.assertRaisesRegex(ValueError, "protected exports"):
+                packager.verify_candidate(image, "sukisu-susfs-base")
+
+    def test_generated_header_must_match_build_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            image = candidate(Path(directory))
+            header = image.parent / "gki_module_protected_exports.h"
+            header.write_text(EMPTY_EXPORTS + "\n")
+            with self.assertRaisesRegex(ValueError, "header"):
+                packager.verify_candidate(image, "sukisu-susfs-base")
+
     def test_base_and_final_round_trip(self):
         for kpm, name in [(False, "sukisu-susfs-base"), (True, "sukisu-susfs-kpm")]:
             with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:

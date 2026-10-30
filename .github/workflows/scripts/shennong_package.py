@@ -11,7 +11,7 @@ import zipfile
 from pathlib import Path
 
 from shennong_build import ROOT, run
-from shennong_validate import validate_config, validate_image, validate_kpm
+from shennong_validate import validate_config, validate_image, validate_kpm, validate_protected_exports
 
 
 STOCK_SHA = "f75f52b48aa1f955a26e8c9cd7ff072a4a7ac91dcb54b6f82b809a287997c861"
@@ -143,6 +143,11 @@ def verify_candidate(path, name):
     metadata = path.parent / ("kpm-validation.json" if kpm else "validation.json")
     if json.loads(metadata.read_text())["sha256"] != report["sha256"]:
         raise ValueError("candidate hash differs from validated CI artifact")
+    report["module_exports"] = validate_protected_exports(
+        (path.parent / "gki_module_protected_exports.h").read_text())
+    build_report = json.loads((path.parent / "validation.json").read_text())
+    if report["module_exports"] != build_report.get("module_exports"):
+        raise ValueError("generated protected exports header differs from build evidence")
     if kpm:
         original = (path.parent / "Image").read_bytes()
         original_sha = json.loads((path.parent / "validation.json").read_text())["sha256"]
@@ -152,11 +157,19 @@ def verify_candidate(path, name):
     return report
 
 
-def create_anykernel(image_path, repo, output, tools=None):
+def create_anykernel(boot_path, repo, output, tools=None):
     if tools is None or set(tools) != {"tools/busybox", "tools/magiskboot"}:
         raise ValueError("explicit verified ARM64 installer tools required")
     for name, content in tools.items():
         validate_installer_binary(content, name)
+    boot = boot_path.read_bytes()
+    inspect_boot(boot)
+    installer = (ROOT / "packaging/anykernel.sh").read_text()
+    for placeholder, value in {"@BOOT_SHA256@": hashlib.sha256(boot).hexdigest(),
+                               "@PARTITION_SIZE@": str(len(boot))}.items():
+        if installer.count(placeholder) != 1:
+            raise ValueError(f"installer must contain exactly one {placeholder}")
+        installer = installer.replace(placeholder, value)
     members = ["LICENSE", "META-INF/com/google/android/update-binary",
                "META-INF/com/google/android/updater-script",
                "tools/ak3-core.sh", "tools/busybox", "tools/magiskboot"]
@@ -168,11 +181,14 @@ def create_anykernel(image_path, repo, output, tools=None):
             entry.create_system = 3
             entry.external_attr = (0o100755 if name != "LICENSE" else 0o100644) << 16
             archive.writestr(entry, content, compress_type=zipfile.ZIP_DEFLATED)
-        archive.writestr("anykernel.sh", (ROOT / "packaging/anykernel.sh").read_text())
-        archive.write(image_path, "Image")
+        archive.writestr("anykernel.sh", installer)
+        archive.writestr("tools/shennong-flash.sh", (ROOT / "packaging/shennong-flash.sh").read_text())
+        archive.write(boot_path, "candidate-boot.img")
     with zipfile.ZipFile(output) as archive:
-        if archive.testzip() is not None or archive.read("Image") != image_path.read_bytes():
+        if archive.testzip() is not None or archive.read("candidate-boot.img") != boot:
             raise ValueError("AnyKernel zip round-trip mismatch")
+        if archive.read("anykernel.sh").decode() != installer:
+            raise ValueError("AnyKernel installer round-trip mismatch")
         for name, content in tools.items():
             if archive.read(name) != content:
                 raise ValueError(f"{name}: AnyKernel tool round-trip mismatch")
@@ -233,14 +249,15 @@ def package(args):
         raise ValueError("boot kernel round-trip mismatch")
     boot.rename(final_boot)
     archive = out / f"{args.name}-EXPERIMENTAL-AnyKernel3.zip"
-    create_anykernel(args.image, args.anykernel, archive, tools)
+    create_anykernel(final_boot, args.anykernel, archive, tools)
     report.update({
         "stock_sha256": STOCK_SHA, "stock_layout": layout,
         "candidate_layout": packed_layout, "tool_source_pins": PINS,
         "authentication": "unsigned AVB NONE; original OEM/GKI signatures not copied",
         "runtime": "NOT TESTED; separate flash/root-migration approval required",
         "anykernel_target": "active-slot boot only; requires verified stock boot",
-        "anykernel_runtime": "installer not executed; magiskboot footer/certificate handling unverified",
+        "anykernel_runtime": "host-tested direct canonical boot write with readback; device execution NOT TESTED",
+        "anykernel_payload": "candidate-boot.img equals canonical boot byte-for-byte; no on-device repacking",
         "installer_sources": INSTALLER_SOURCES,
         "installer_binaries": {name: validate_installer_binary(data, name)
                                for name, data in tools.items()},

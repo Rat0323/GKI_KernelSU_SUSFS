@@ -30,9 +30,12 @@ patch additions/removals are changed.
   ARM64 Image structure and linked feature symbols.
 - KMI trimming and strict symbol-list checks remain enabled.
 - Only the four additional KPM export names are added for the KPM build.
-- The aarch64 protected-exports list is omitted per the SuSFS author's
-  Android 14 build instructions. This differs from stock module protection
-  and requires vendor-module/runtime testing; it is not an ABI guarantee.
+- The physical aarch64 protected-exports input is emptied, and the actual
+  generated C header is retained and checked. Disabling only the Bazel
+  attribute was insufficient: the first candidate rejected stock rfkill
+  and other GKI modules. MODULE_SIG_PROTECT remains enabled, but the empty
+  list removes its signed-GKI-only export restriction. This is not stock
+  equivalent security or a full vendor compatibility guarantee.
 - The KPM payload and host tool are compiled from one fixed SukiSU fork.
   Its kernel-to-kernel framing and ABI v2 are checked before building.
 - Original, unpatched Images are retained. Patched entries must lie inside
@@ -61,12 +64,23 @@ It creates a canonical kernel-only v4 boot at the verified 96 MiB
 partition size, with a recomputed unsigned AVB hash footer. Invalid OEM/GKI
 signatures from the old kernel are not carried over.
 
-The separate AnyKernel3 ZIP includes only the selected Image and a pinned
-kernel-only installer. Its checks restrict it to shennong,
-OS3.0.310.0.WNBCNXM and the verified stock boot hash. It targets active-slot
-boot only, not init_boot, vendor_boot, DTB or global vbmeta. Neither the
-installer nor bootloader acceptance is verified by an offline ZIP
-round-trip. Both package types remain explicitly experimental.
+The AnyKernel3 ZIP now includes the exact canonical partition-sized boot
+image, not a raw Image for on-device repacking. The pinned launcher and
+core setup select the active boot partition; a small guarded helper
+checks shennong, OS3.0.310.0.WNBCNXM, the bootconfig unlocked state,
+active-slot identity, partition size, payload hash and verified stock
+boot hash before writing. Every read/write error is fatal, and a complete
+partition readback must match the payload hash before success is printed.
+The bootconfig check avoids userspace ro.boot property spoofing observed
+on the target's root environment. Missing or locked state fails closed.
+
+Only active-slot boot is written, not init_boot, vendor_boot, DTB or
+global vbmeta. A temporary stock backup is retained on installer failure;
+the independently verified host rollback backup is still required. Do not
+run an OTA or another flasher concurrently. A power loss or write failure
+can leave an unbootable partition; a checked write is not transactional.
+Host file-based failure-injection tests do not prove device behavior or
+bootloader acceptance. Both package types remain explicitly experimental.
 
 The AnyKernel template's default binaries are ARM32. Packaging instead
 requires `--installer-assets` pointing to the unmodified official
@@ -88,15 +102,22 @@ empty extra-module region and copy reservation within declared Image
 memory. The patch tool's status text alone is not acceptance.
 
 The unsigned canonical boot packaging removes the stock's obsolete GKI
-certificate trailer. The AnyKernel installer instead relies on its pinned
-magiskboot repacker; its on-device certificate/footer handling has not been
-verified offline. Prefer the independently inspected full boot candidate
-when reviewing the later test procedure.
+certificate trailer. The ZIP carries this same verified boot byte-for-byte
+and does not call the generic magiskboot repacker or flash_boot path. The
+recomputed AVB digest is checked offline; OEM signing is not reproduced.
+Packaging also rejects old build artifacts without the validated empty
+protected-export header and its matching build-evidence hash.
 
 No package is produced from failure diagnostics or the old malformed
 Image. Re-extracted Image hashes must match the validated build.
 
 ## Verified Build, Not Runtime Acceptance
+
+Historical result below: the user later flashed the KPM candidate from
+this first run and encountered a boot-animation hang. Both old binaries
+are withdrawn. Protected GKI export rejection is a confirmed defect;
+the final watchdog stack was unavailable. New source tests and a rebuilt
+candidate must not be represented as proof of a successful device boot.
 
 Run 41042524296 built source f778b62 successfully in 37m43s:
 https://github.com/Rat0323/GKI_KernelSU_SUSFS/actions/runs/41042524296.
