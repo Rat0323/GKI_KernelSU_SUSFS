@@ -1,0 +1,64 @@
+{
+  "schema": 1,
+  "device": "Xiaomi 14 Pro / shennong / 23116PN5BC",
+  "rom": "OS3.0.310.0.WNBCNXM",
+  "baseline": {
+    "linux": "6.1.138",
+    "branch": "android14-6.1",
+    "kmi_generation": 11,
+    "page_size": 4096,
+    "clang": "r487747c",
+    "lto": "none",
+    "cfi": true
+  },
+  "superproject": {
+    "url": "https://android.googlesource.com/kernel/superproject",
+    "revision": "c5fd854d46f3fe29b89a80e5f2cf3bc643c64f20"
+  },
+  "projects": {
+    "common": ["kernel/common", "0c3d559bcd85c64dae9c9c9687abbe5347fff3ad"],
+    "build/kernel": ["kernel/build", "06f7c2ac33c6d9927613bafd95def11d18924f5e"],
+    "build/bazel_common_rules": ["platform/build/bazel_common_rules", "62c496cd1d821948d2f4a7fcf702e54416e5a754"],
+    "common-modules/virtual-device": ["kernel/common-modules/virtual-device", "f2eb8e837a6d6a70b65d6916829f57b5c98e99f9"],
+    "external/bazel-skylib": ["platform/external/bazel-skylib", "f998e5dc13c03f0eae9e373263d3afff0932c738"],
+    "external/python/absl-py": ["platform/external/python/absl-py", "2f199605a9875340569e039657f8b4c72d51b84d"],
+    "external/stardoc": ["platform/external/stardoc", "e83f522ee95419e55d2c5654aa6e0143beeef595"],
+    "kernel/configs": ["kernel/configs", "bd79f38685cf939ab836dd8ddd2e01506ccff47a"],
+    "kernel/tests": ["kernel/tests", "7b2005bacbf91c5c494abded85b3c7fea88862a8"],
+    "prebuilts/bazel/linux-x86_64": ["platform/prebuilts/bazel/linux-x86_64", "7bfbec9e829bbae6816d5f39aba345df76e627c1"],
+    "prebuilts/build-tools": ["platform/prebuilts/build-tools", "4649614b4030ad825f2e94401d04526651f44e88"],
+    "prebuilts/clang-tools": ["platform/prebuilts/clang-tools", "f08a96e4015aed7c0341b880ccd85500b1b44a26"],
+    "prebuilts/clang/host/linux-x86": ["platform/prebuilts/clang/host/linux-x86", "7775eb113f960bc69a780b621d03a715914d4bca"],
+    "prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.17-4.8": ["platform/prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.17-4.8", "f6d40532273c8bd628b960ecc0970c7294c8d891"],
+    "prebuilts/jdk/jdk11": ["platform/prebuilts/jdk/jdk11", "649eec4416e2ed6298af49a56876772767a0e5ae"],
+    "prebuilts/kernel-build-tools": ["kernel/prebuilts/build-tools", "e905be252a53d20c52bd9e59df3ff8fdd46b9eab"],
+    "prebuilts/ndk-r23": ["toolchain/prebuilts/ndk/r23", "19ac7e4eded12adb99d4f613490dde6dd0e72664"],
+    "tools/mkbootimg": ["platform/system/tools/mkbootimg", "615a1fced5f8e2755642d30357674d3bfa21b85e"]
+  },
+  "components": {
+    "sukisu": {
+      "url": "https://github.com/SukiSU-Ultra/SukiSU-Ultra.git",
+      "revision": "b16e899a555e9b96aa1225f049cd7274820ca5b8",
+      "branch": "builtin",
+      "version_code": 41104,
+      "version_label": "v4.3.0-b16e899a@builtin",
+      "version_code_reference": "40000 + 3919 - 2815; main a9d66f8fe8cc022dfb0cbd7e5831dd1a77cb9cd4"
+    },
+    "susfs": {
+      "url": "https://github.com/ShirkNeko/susfs4ksu.git",
+      "revision": "ee155a1ad4219804a7c54cb39dd4fa1b5c2a3fa4",
+      "branch": "gki-android14-6.1",
+      "version": "v2.3.0"
+    },
+    "kernelpatch": {
+      "url": "https://github.com/SukiSU-Ultra/SukiSU_KernelPatch_patch.git",
+      "revision": "1c5b608916357ac86a94cc736e235db1fac4a29d",
+      "bridge_abi": 2
+    }
+  },
+  "arm_toolchain": {
+    "url": "https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/12.2.rel1/binrel/arm-gnu-toolchain-12.2.rel1-x86_64-aarch64-none-elf.tar.xz",
+    "sha256": "62d66e0ad7bd7f2a183d236ee301a5c73c737c886c7944aa4f39415aab528daf",
+    "checksum_source": "https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/12.2.rel1/binrel/arm-gnu-toolchain-12.2.rel1-x86_64-aarch64-none-elf.tar.xz.sha256asc"
+  }
+}

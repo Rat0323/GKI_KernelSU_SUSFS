@@ -1,0 +1,53 @@
+name: Shennong Pinned Build
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shennong-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  pinned-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - name: Checkout build harness
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Regression tests
+        run: python3 -m unittest discover -s tests -v
+      - name: Install host build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential flex bison libssl-dev libelf-dev zlib1g-dev rsync bc cmake lz4
+          df -h
+      - name: Compile separate base and KPM variants
+        run: |
+          python3 -u .github/workflows/scripts/shennong_build.py \
+            --work "$RUNNER_TEMP/shennong-build" --out "$GITHUB_WORKSPACE/out"
+      - name: Upload verified build outputs
+        if: success()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: shennong-6.1.138-experimental-${{ github.run_id }}
+          path: out/
+          include-hidden-files: true
+          if-no-files-found: error
+          compression-level: 1
+          retention-days: 14
+      - name: Upload failure diagnostics only
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: shennong-failed-build-diagnostics-${{ github.run_id }}
+          path: |
+            out/*.log
+            out/shennong-source-lock.json
+            out/common-integration.patch
+          if-no-files-found: warn
+          retention-days: 14

@@ -7,6 +7,11 @@ permissions:
 on:
   workflow_dispatch:
     inputs:
+      shennong_pinned:
+        description: 'Use the locked shennong 6.1.138 experiment (ignores generic inputs)'
+        required: false
+        type: boolean
+        default: false
       android_version:
         description: 'Android 版本'
         required: true
@@ -105,7 +110,13 @@ env:
   PYTHON_VERSION: '3.10'
 
 jobs:
+  shennong:
+    if: ${{ inputs.shennong_pinned }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/shennong-build.yml
   build:
+    if: ${{ !inputs.shennong_pinned }}
     runs-on: ubuntu-latest
     steps:
       - name: Maximize build space
